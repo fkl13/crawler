@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -21,12 +22,11 @@ func main() {
 
 	fmt.Printf("starting crawl of: %s...\n", rawBaseURL)
 
-	htmlBody, err := getHTML(rawBaseURL)
-	if err != nil {
-		fmt.Println(err)
+	pages := map[string]int{}
+	crawlPage(rawBaseURL, rawBaseURL, pages)
+	for normalizedURL, count := range pages {
+		fmt.Printf("%d - %s\n", count, normalizedURL)
 	}
-
-	fmt.Print(htmlBody)
 }
 
 func getHTML(rawURL string) (string, error) {
@@ -59,4 +59,52 @@ func getHTML(rawURL string) (string, error) {
 		return "", fmt.Errorf("couldn't read response body: %v", err)
 	}
 	return string(body), nil
+}
+
+func crawlPage(rawBaseURL, rawCurrentURL string, pages map[string]int) {
+	currentURL, err := url.Parse(rawCurrentURL)
+	if err != nil {
+		fmt.Printf("Error - crawlPage: couldn't parse URL '%s': %v\n", rawCurrentURL, err)
+		return
+	}
+
+	parsedURL, err := url.Parse(rawBaseURL)
+	if err != nil {
+		fmt.Printf("Error - crawlPage: couldn't parse URL '%s': %v\n", rawBaseURL, err)
+		return
+	}
+
+	if currentURL.Hostname() != parsedURL.Hostname() {
+		return
+	}
+
+	normalizeURL, err := normalizeURL(rawCurrentURL)
+	if err != nil {
+		fmt.Printf("Error - normalizedURL: %v", err)
+		return
+	}
+
+	if _, ok := pages[normalizeURL]; ok {
+		pages[normalizeURL]++
+		return
+	}
+
+	pages[normalizeURL] = 1
+
+	fmt.Printf("crawling %s\n", rawCurrentURL)
+	html, err := getHTML(rawCurrentURL)
+	if err != nil {
+		fmt.Printf("Error - getHTML: %v", err)
+		return
+	}
+
+	urls, err := getURLsFromHTML(html, parsedURL)
+	if err != nil {
+		fmt.Printf("Error - getURLsFromHTML: %v", err)
+		return
+	}
+
+	for _, nextURL := range urls {
+		crawlPage(rawBaseURL, nextURL, pages)
+	}
 }
