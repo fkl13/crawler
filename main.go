@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -13,23 +14,34 @@ import (
 type config struct {
 	pages              map[string]PageData
 	baseURL            *url.URL
+	maxPages           int
 	mu                 *sync.Mutex
 	concurrencyControl chan struct{}
 	wg                 *sync.WaitGroup
 }
 
-const maxConcurrency = 3
-
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("no website provided")
+	if len(os.Args) < 4 {
+		fmt.Println("not enough arguments provided")
+		fmt.Println("usage: crawler <baseURL> <maxConcurrency> <maxPages>")
 		os.Exit(1)
 	}
-	if len(os.Args) > 2 {
+	if len(os.Args) > 4 {
 		fmt.Println("too many arguments provided")
 		os.Exit(1)
 	}
 	rawBaseURL := os.Args[1]
+
+	maxConcurrency, err := strconv.Atoi(os.Args[2])
+	if err != nil {
+		fmt.Printf("Error - maxConcurrency: %v", err)
+		return
+	}
+	maxPages, err := strconv.Atoi(os.Args[3])
+	if err != nil {
+		fmt.Printf("Error - maxPages: %v", err)
+		return
+	}
 
 	fmt.Printf("starting crawl of: %s...\n", rawBaseURL)
 
@@ -42,6 +54,7 @@ func main() {
 	cfg := config{
 		pages:              map[string]PageData{},
 		baseURL:            currentURL,
+		maxPages:           maxPages,
 		mu:                 &sync.Mutex{},
 		wg:                 &sync.WaitGroup{},
 		concurrencyControl: make(chan struct{}, maxConcurrency),
@@ -51,8 +64,8 @@ func main() {
 	go cfg.crawlPage(rawBaseURL)
 	cfg.wg.Wait()
 
-	for _, page := range cfg.pages {
-		fmt.Printf("%s\n", page.URL)
+	for normalizedURL := range cfg.pages {
+		fmt.Printf("found: %s\n", normalizedURL)
 	}
 }
 
@@ -89,10 +102,15 @@ func getHTML(rawURL string) (string, error) {
 }
 
 func (cfg *config) crawlPage(rawCurrentURL string) {
-	defer cfg.wg.Done()
-
 	cfg.concurrencyControl <- struct{}{}
-	defer func() { <-cfg.concurrencyControl }()
+	defer func() {
+		<-cfg.concurrencyControl
+		cfg.wg.Done()
+	}()
+
+	if cfg.pagesLen() >= cfg.maxPages {
+		return
+	}
 
 	currentURL, err := url.Parse(rawCurrentURL)
 	if err != nil {
@@ -121,6 +139,8 @@ func (cfg *config) crawlPage(rawCurrentURL string) {
 		return
 	}
 
+	fmt.Printf("crawling %s\n", rawCurrentURL)
+
 	pageData := extractPageData(html, rawCurrentURL)
 	cfg.mu.Lock()
 	cfg.pages[normalizedURL] = pageData
@@ -142,4 +162,10 @@ func (cfg *config) addPageVisit(normalizedURL string) bool {
 
 	cfg.pages[normalizedURL] = PageData{}
 	return true
+}
+
+func (cfg *config) pagesLen() int {
+	cfg.mu.Lock()
+	defer cfg.mu.Unlock()
+	return len(cfg.pages)
 }
